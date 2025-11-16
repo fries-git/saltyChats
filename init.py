@@ -1,3 +1,5 @@
+# A fork of the original OriginChats server by Mist.
+
 import asyncio
 from server import OriginChatsServer
 from logger import Logger
