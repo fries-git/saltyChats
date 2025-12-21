@@ -21,6 +21,7 @@
   "message": { ...message object... }
 }
 ```
+The message object also contains "position" which tells you where in the channel the message is
 - On error: see [common errors](errors.md).
 
 **Notes:**

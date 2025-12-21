@@ -177,8 +177,11 @@ def get_channel_message(channel_name, message_id):
         with open(f"{channels_db_dir}/{channel_name}.json", 'r') as f:
             channel_data = json.load(f)
 
+        i = 0
         for msg in channel_data:
+            i += 1
             if msg.get("id") == message_id:
+                msg["position"] = i
                 return msg
         return None  # Message not found
     except FileNotFoundError:
