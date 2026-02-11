@@ -43,7 +43,7 @@ def getInfo():
         "name": "Example Plugin",
         "description": "Simple example plugin that responds to ?hello",
         "version": "1.0.0",
-        "author": "OriginChats",
+        "author": "Server",
         "handles": ["new_message"]
     }
 
