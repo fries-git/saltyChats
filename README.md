@@ -1,5 +1,8 @@
 # OriginChats Server Architecture
 
+## Credits
+Don't yet have a credit.md file so soon. Anyway, all credit to [Mistium](https://github.com/Mistium) and the [original project](https://github.com/originChats/server). This project is mainly minor changes and fixes.
+
 ## Project Structure
 
 ```
