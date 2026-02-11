@@ -10,7 +10,6 @@ import sys
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from logger import Logger
 
-
 def send_message_to_channel(channel, content, server_data):
     """Send a message to a channel through the server's broadcast system"""
     import asyncio
@@ -24,7 +23,6 @@ def send_message_to_channel(channel, content, server_data):
         "pinned": False,
         "id": str(uuid.uuid4())
     }
-    
     # Save to channel
     channels.save_channel_message(channel, out_msg)
     
@@ -38,10 +36,7 @@ def send_message_to_channel(channel, content, server_data):
             loop.create_task(broadcast_to_all(server_data["connected_clients"], message))
         except Exception as e:
             Logger.error(f"Welcome Plugin: Error broadcasting message: {e}")
-
-# ---------------------------------------------------------------------------------------------------------------- #
 send_message_to_channel("general", "Example Plugin has been loaded!", None)
-
 
 def getInfo():
     return {
@@ -51,7 +46,6 @@ def getInfo():
         "author": "OriginChats",
         "handles": ["new_message"]
     }
-
 
 def on_new_message(ws, message_data, server_data=None):
     try:
