@@ -60,7 +60,7 @@ def on_new_message(ws, message_data, server_data=None):
         if not content or not channel:
             return
 
-        if content.lower() == '?rtd':
+        if content.lower() == '?hello':
             # Use the helper to send a message into the channel
             send_message_to_channel(channel, 'Hello World', server_data)
     except Exception as e:
