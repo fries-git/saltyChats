@@ -16,7 +16,6 @@ def get_channel(channel_name):
         if channel.get("name") == channel_name:
             return channel
     return None
-
 def get_channel_messages(channel_name, start, limit):
     """
     Retrieve messages from a specific channel.
