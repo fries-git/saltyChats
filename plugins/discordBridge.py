@@ -1,6 +1,4 @@
-# Discord Bridge Plugin for OriginChats
-# Direct Discord Gateway connection and API integration
-# Syncs channels and bridges messages between OriginChats and Discord
+# discordBridge.py - Plugin to bridge OriginChats with a Discord server. Fixed up by fries (yes i have to credit myself im that selfish) to work with the newest updates.
 
 import os
 import json
