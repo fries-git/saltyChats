@@ -880,7 +880,7 @@ def handle(ws, message, server_data=None):
                     option = options[optionName]
                     
                     if not _validate_type(value, option.type):
-                        return {"cmd": "error", "val": f"Invalid type for argument '{optionName}': expected {option.type}"}
+                        return {"cmd": "error", "val": f"Invalid type for argument '{optionName}': expected {option.type}, got {type(value)}"}
 
                 return {"cmd": "slash_call", "val": {"command": cmd_name, "args": args}, "invoker": user_id, "channel": channel, "global": True}
             case "slash_response":
