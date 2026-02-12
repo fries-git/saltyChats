@@ -882,7 +882,7 @@ def handle(ws, message, server_data=None):
                     if not _validate_type(value, option.type):
                         return {"cmd": "error", "val": f"Invalid type for argument '{optionName}': expected {option.type}, got {type(value)}"}
 
-                return {"cmd": "slash_call", "val": {"command": cmd_name, "args": args}, "invoker": user_id, "channel": channel}
+                return {"cmd": "slash_call", "val": {"command": cmd_name, "args": args}, "invoker": user_id, "channel": channel, "global": True}
             case "slash_response":
                 # Handle response to a slash command
                 user_id, error = _require_user_id(ws, "Authentication required")
@@ -897,7 +897,7 @@ def handle(ws, message, server_data=None):
                 if not channel:
                     return {"cmd": "error", "val": "Channel parameter is required for slash commands"}
                 
-                return {"cmd": "slash_response", "val": message.get("response"), "invoker": message.get("invoker"), "channel": channel}
+                return {"cmd": "slash_response", "val": message.get("response"), "invoker": message.get("invoker"), "channel": channel, "global": True}
             case _:
                 return {"cmd": "error", "val": f"Unknown command: {message.get('cmd')}"}
     # except Exception as e:
