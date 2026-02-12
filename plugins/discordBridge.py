@@ -1,4 +1,4 @@
-# discordBridge.py - Plugin to bridge OriginChats with a Discord server. Fixed up by fries (yes i have to credit myself im that selfish) to work with the newest updates.
+# discordBridge.py - Plugin to bridge OriginChats with a Discord server. Fixed up to work with the newest updates.
 
 import os
 import json
