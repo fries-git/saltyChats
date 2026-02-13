@@ -22,4 +22,4 @@ def on_new_message(ws, message_data, server_data=None):
     content = message_data.get('content', '').strip().lower()
     if content == "?rtd":
         roll = random.randint(1, 10)
-        send_message_to_channel("fries", message_data.get('channel'), f"You rolled a {roll} on a 10-sided die!", server_data)
+        send_message_to_channel("Mist", message_data.get('channel'), f"You rolled a {roll} on a 10-sided die!", server_data)
