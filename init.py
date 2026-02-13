@@ -3,8 +3,8 @@ from server import OriginChatsServer
 from logger import Logger
 
 async def main():
-    """Main function to start the OriginChats server"""
-    Logger.info("Initializing OriginChats server...")
+    """Main function to start the SaltyChats server"""
+    Logger.info("Initializing SaltyChats server...")
     server = OriginChatsServer()
     Logger.success("Server initialized successfully")
     await server.start_server()
