@@ -1,217 +1,213 @@
-import asyncio, websockets, json, os
-from handlers.websocket_utils import send_to_client, heartbeat, broadcast_to_all, broadcast_to_channel, broadcast_to_voice_channel, broadcast_to_voice_channel_with_viewers
-from handlers.auth import handle_authentication
-from handlers import message as message_handler
-from handlers.rate_limiter import RateLimiter
-import watchers
-from plugin_manager import PluginManager
+import asyncio, json, websockets
+import sys
+import os
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from logger import Logger
 
-class OriginChatsServer:
-    """OriginChats WebSocket server"""
+async def send_to_client(ws, message):
+    """Send a message to a specific client"""
+    try:
+        await ws.send(json.dumps(message))
+        return True
+    except websockets.exceptions.ConnectionClosed:
+        Logger.warning("Connection closed when trying to send message")
+        return False
+    except Exception as e:
+        Logger.error(f"Error sending message: {str(e)}")
+        return False
+
+async def heartbeat(ws, heartbeat_interval=30):
+    """Send periodic pings to keep the connection alive"""
+    try:
+        while True:
+            await asyncio.sleep(heartbeat_interval)
+            if not await send_to_client(ws, {"cmd": "ping"}):
+                break
+    except asyncio.CancelledError:
+        Logger.info("Heartbeat task cancelled")
+    except Exception as e:
+        Logger.error(f"Heartbeat error: {str(e)}")
+
+async def broadcast_to_all(connected_clients, message):
+    """Broadcast a message to all connected clients"""
+    disconnected = set()
+    # Create a copy of the set to avoid "Set changed size during iteration" error
+    clients_copy = connected_clients.copy()
+    for ws in clients_copy:
+        success = await send_to_client(ws, message)
+        if not success:
+            disconnected.add(ws)
     
-    def __init__(self, config_path="config.json"):
-        # Load configuration
-        with open(os.path.join(os.path.dirname(__file__), config_path), "r") as f:
-            self.config = json.load(f)
+    # Clean up disconnected clients
+    for ws in disconnected:
+        connected_clients.discard(ws)  # Use discard instead of remove to avoid KeyError
+    
+    if disconnected:
+        Logger.delete(f"Removed {len(disconnected)} disconnected clients")
+    
+    return disconnected
+
+async def broadcast_to_channel(connected_clients, message, channel_name):
+    """Broadcast a message to all connected clients who have access to the specified channel"""
+    from db import channels
+    
+    disconnected = set()
+    sent_count = 0
+    
+    clients_copy = connected_clients.copy()
+    
+    for ws in clients_copy:
+        if not getattr(ws, 'authenticated', False):
+            continue
+            
+        user_id = getattr(ws, 'user_id', None)
+        if not user_id:
+            continue
         
-        # Server state
-        self.connected_clients = set()
-        self.version = self.config["service"]["version"]
-        self.heartbeat_interval = 30
-        self.main_event_loop = None
-        self.file_observer = None
-        self.slash_commands = {}
+        user_roles = getattr(ws, 'user_roles', None)
+        if user_roles is None:
+            from db import users
+            user_data = users.get_user(user_id)
+            if user_data:
+                user_roles = user_data.get("roles", [])
+                ws.user_roles = user_roles
+            else:
+                continue
         
-        self.voice_channels = {}
+        if channels.does_user_have_permission(channel_name, user_roles, "view"):
+            success = await send_to_client(ws, message)
+            if not success:
+                disconnected.add(ws)
+            else:
+                sent_count += 1
+    
+    for ws in disconnected:
+        connected_clients.discard(ws)
+    
+    if disconnected:
+        Logger.delete(f"Removed {len(disconnected)} disconnected clients")
+    
+    return disconnected
+
+async def disconnect_user(connected_clients, identifier, reason="User disconnected"):
+    """Disconnect a specific user by username or user ID"""
+    from db import users
+    
+    disconnected = []
+    clients_copy = connected_clients.copy()
+    
+    # Try to get user ID if username is provided
+    target_user_id = identifier
+    if identifier and not identifier.startswith(("USR:", "usr_")):  # Likely a username
+        lookup_user_id = users.get_id_by_username(identifier)
+        if lookup_user_id:
+            target_user_id = lookup_user_id
+    
+    for ws in clients_copy:
+        ws_user_id = getattr(ws, 'user_id', None)
+        if hasattr(ws, 'username') and (ws.username == identifier or ws_user_id == target_user_id):
+            try:
+                await send_to_client(ws, {"cmd": "disconnect", "reason": reason})
+                await ws.close()
+                disconnected.append(ws)
+                Logger.delete(f"Disconnected user {identifier}: {reason}")
+            except Exception as e:
+                Logger.error(f"Error disconnecting user {identifier}: {str(e)}")
+                disconnected.append(ws)
+    
+    # Clean up disconnected clients
+    for ws in disconnected:
+        connected_clients.discard(ws)
+    
+    return len(disconnected)
+
+async def broadcast_to_voice_channel(connected_clients, voice_channels, message, channel_name):
+    """Broadcast a message to all connected clients who are in a specific voice channel"""
+    disconnected = set()
+    sent_count = 0
+    
+    # Get participants in this voice channel
+    participants = voice_channels.get(channel_name, {})
+    if not participants:
+        return disconnected
+    
+    # Create a copy of the set to avoid "Set changed size during iteration" error
+    clients_copy = connected_clients.copy()
+    
+    for ws in clients_copy:
+        # Only send to authenticated users
+        if not getattr(ws, 'authenticated', False):
+            continue
+            
+        user_id = getattr(ws, 'user_id', None)
+        if not user_id:
+            continue
         
-        # Initialize rate limiter if enabled
-        rate_config = self.config.get("rate_limiting", {})
-        if rate_config.get("enabled", False):
-            self.rate_limiter = RateLimiter(
-                messages_per_minute=rate_config.get("messages_per_minute", 30),
-                burst_limit=rate_config.get("burst_limit", 5),
-                cooldown_seconds=rate_config.get("cooldown_seconds", 60)
-            )
+        # Check if user is in this voice channel
+        if user_id in participants:
+            success = await send_to_client(ws, message)
+            if not success:
+                disconnected.add(ws)
+            else:
+                sent_count += 1
+    
+    # Clean up disconnected clients
+    for ws in disconnected:
+        connected_clients.discard(ws)
+    
+    if disconnected:
+        Logger.delete(f"Removed {len(disconnected)} disconnected clients from voice channel broadcast")
+    
+    return disconnected
+
+async def broadcast_to_voice_channel_with_viewers(connected_clients, voice_channels, participant_message, viewer_message, channel_name):
+    """Broadcast to voice channel participants (with peer_id) AND to channel viewers (without peer_id)"""
+    from db import channels
+    
+    disconnected = set()
+    sent_count = 0
+    
+    participants = voice_channels.get(channel_name, {})
+    if not participants:
+        return disconnected
+    
+    clients_copy = connected_clients.copy()
+    
+    for ws in clients_copy:
+        if not getattr(ws, 'authenticated', False):
+            continue
+            
+        user_id = getattr(ws, 'user_id', None)
+        if not user_id:
+            continue
+        
+        user_roles = getattr(ws, 'user_roles', None)
+        if user_roles is None:
+            from db import users
+            user_data = users.get_user(user_id)
+            if user_data:
+                user_roles = user_data.get("roles", [])
+                ws.user_roles = user_roles
+            else:
+                continue
+        
+        if not channels.does_user_have_permission(channel_name, user_roles, "view"):
+            continue
+        
+        if user_id in participants:
+            success = await send_to_client(ws, participant_message)
         else:
-            self.rate_limiter = None
+            success = await send_to_client(ws, viewer_message)
         
-        # Initialize plugin manager
-        self.plugin_manager = PluginManager()
-        
-        Logger.info(f"OriginChats WebSocket Server v{self.version} initialized")
-        if self.rate_limiter:
-            Logger.info(f"Rate limiting enabled: {rate_config.get('messages_per_minute', 30)} msg/min, burst: {rate_config.get('burst_limit', 5)}")
+        if not success:
+            disconnected.add(ws)
         else:
-            Logger.warning("Rate limiting disabled")
+            sent_count += 1
     
-    async def handle_client(self, websocket):
-        """WebSocket connection handler"""
-        # Get client info
-        headers = websocket.request.headers
-        client_ip = headers.get('CF-Connecting-IP') or headers.get('X-Forwarded-For') or websocket.remote_address[0]
-        Logger.add(f"New connection from {client_ip}")
-        
-        # Add to connected clients
-        self.connected_clients.add(websocket)
-        Logger.info(f"Total connected clients: {len(self.connected_clients)}")
-        
-        # Start heartbeat task
-        heartbeat_task = asyncio.create_task(heartbeat(websocket, self.heartbeat_interval))
-        
-        try:
-            # Send handshake message
-            await send_to_client(websocket, {
-                "cmd": "handshake",
-                "val": {
-                    "server": self.config["server"],
-                    "limits": self.config["limits"],
-                    "version": "1.1.0",
-                    "validator_key": "originChats-" + self.config["rotur"]["validate_key"]
-                }
-            })
-                
-            # Keep connection open and handle client messages
-            async for message in websocket:
-                try:
-                    data = json.loads(message)
-                    
-                    # Handle authentication
-                    if data.get("cmd") == "auth" and not getattr(websocket, "authenticated", False):
-                        # Create server data object for authentication
-                        auth_server_data = {
-                            "connected_clients": self.connected_clients,
-                            "config": self.config,
-                            "plugin_manager": self.plugin_manager,
-                            "rate_limiter": self.rate_limiter
-                        }
-                        await handle_authentication(
-                            websocket, data, self.config, 
-                            self.connected_clients, client_ip, auth_server_data
-                        )
-                        continue
-
-                    # Require authentication for other commands
-                    if not getattr(websocket, "authenticated", False):
-                        await send_to_client(websocket, {"cmd": "auth_error", "val": "Authentication required"})
-                        continue
-
-                    # Create server data object for message handler
-                    server_data = {
-                        "connected_clients": self.connected_clients,
-                        "config": self.config,
-                        "plugin_manager": self.plugin_manager,
-                        "rate_limiter": self.rate_limiter,
-                        "send_to_client": send_to_client,
-                        "slash_commands": self.slash_commands,
-                        "voice_channels": self.voice_channels
-                    }
-                    
-                    # Handle message
-                    response = await message_handler.handle(websocket, data, server_data)
-                    if not response:
-                        Logger.warning(f"No response for message: {data}")
-                        continue
-                    
-                    if response.get("global", False):
-                        # Check if this is a channel-specific message
-                        if response.get("channel"):
-                            # Broadcast only to users who have access to the channel
-                            await broadcast_to_channel(self.connected_clients, response, response["channel"])
-                        else:
-                            # Broadcast to all clients if no channel specified
-                            await broadcast_to_all(self.connected_clients, response)
-                        continue
-                    
-                    if response:
-                        await send_to_client(websocket, response)
-
-                except json.JSONDecodeError:
-                    Logger.error(f"Received invalid JSON: {message[:50]}...")
-                except Exception as e:
-                    Logger.error(f"Error processing message: {str(e)}")
-                    
-        except websockets.exceptions.ConnectionClosed:
-            Logger.info(f"Connection closed by {client_ip}")
-        except Exception as e:
-            Logger.error(f"Error handling connection: {str(e)}")
-        finally:
-            # Clean up
-            heartbeat_task.cancel()
-            if websocket in self.connected_clients:
-                self.connected_clients.remove(websocket)
-                Logger.delete(f"Client {client_ip} removed. {len(self.connected_clients)} clients remaining")
-                
-                username = getattr(websocket, "username", "")
-                
-                if getattr(websocket, "authenticated", False):
-                    user_id = getattr(websocket, "user_id", None)
-                    current_voice_channel = getattr(websocket, "voice_channel", None)
-                    
-                    if user_id and current_voice_channel:
-                        if current_voice_channel in self.voice_channels and user_id in self.voice_channels[current_voice_channel]:
-                            await broadcast_to_voice_channel_with_viewers(
-                                self.connected_clients,
-                                self.voice_channels,
-                                {
-                                    "type": "voice_user_left",
-                                    "channel": current_voice_channel,
-                                    "username": username
-                                },
-                                {
-                                    "type": "voice_user_left",
-                                    "channel": current_voice_channel,
-                                    "username": username
-                                },
-                                current_voice_channel
-                            )
-                            
-                            del self.voice_channels[current_voice_channel][user_id]
-                            
-                            if not self.voice_channels[current_voice_channel]:
-                                del self.voice_channels[current_voice_channel]
-
-                await broadcast_to_all(self.connected_clients, {
-                    "cmd": "user_disconnect",
-                    "username": username
-                })
+    for ws in disconnected:
+        connected_clients.discard(ws)
     
-    async def broadcast_wrapper(self, message):
-        """Wrapper for broadcast_to_all to maintain compatibility with watchers"""
-        await broadcast_to_all(self.connected_clients, message)
+    if disconnected:
+        Logger.delete(f"Removed {len(disconnected)} disconnected clients from voice channel broadcast")
     
-    async def start_server(self):
-        """Start the WebSocket server"""
-        # Store the main event loop for use in other threads
-        self.main_event_loop = asyncio.get_event_loop()
-
-        # Setup file watchers for users.json and channels.json
-        self.file_observer = watchers.setup_file_watchers(self.broadcast_wrapper, self.main_event_loop)
-
-        # Get port from config or use default
-        port = self.config.get("websocket", {}).get("port", 5613)
-        host = self.config.get("websocket", {}).get("host", "127.0.0.1")
-        
-        Logger.info(f"Starting WebSocket server on {host}:{port}")
-        
-        # Trigger server_start event for plugins
-        server_data = {
-            "connected_clients": self.connected_clients,
-            "config": self.config,
-            "plugin_manager": self.plugin_manager,
-            "rate_limiter": self.rate_limiter
-        }
-        self.plugin_manager.trigger_event("server_start", None, {}, server_data)
-        
-        try:
-            async with websockets.serve(self.handle_client, host, port, ping_interval=None):
-                Logger.success(f"WebSocket server running at ws://{host}:{port}")
-                
-                # Keep the server running
-                await asyncio.Future()
-        finally:
-            # Stop file watcher when server stops
-            if self.file_observer:
-                self.file_observer.stop()
-                self.file_observer.join()
-                Logger.info("File watcher stopped")
+    return disconnected
