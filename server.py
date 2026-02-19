@@ -1,5 +1,5 @@
 import asyncio, websockets, json, os
-from handlers.websocket_utils import send_to_client, heartbeat, broadcast_to_all, broadcast_to_channel
+from handlers.websocket_utils import send_to_client, heartbeat, broadcast_to_all, broadcast_to_channel, broadcast_to_voice_channel, broadcast_to_voice_channel_with_viewers
 from handlers.auth import handle_authentication
 from handlers import message as message_handler
 from handlers.rate_limiter import RateLimiter
@@ -22,6 +22,8 @@ class OriginChatsServer:
         self.main_event_loop = None
         self.file_observer = None
         self.slash_commands = {}
+        
+        self.voice_channels = {}
         
         # Initialize rate limiter if enabled
         rate_config = self.config.get("rate_limiting", {})
@@ -101,11 +103,12 @@ class OriginChatsServer:
                         "plugin_manager": self.plugin_manager,
                         "rate_limiter": self.rate_limiter,
                         "send_to_client": send_to_client,
-                        "slash_commands": self.slash_commands
+                        "slash_commands": self.slash_commands,
+                        "voice_channels": self.voice_channels
                     }
                     
                     # Handle message
-                    response = message_handler.handle(websocket, data, server_data)
+                    response = await message_handler.handle(websocket, data, server_data)
                     if not response:
                         Logger.warning(f"No response for message: {data}")
                         continue
@@ -139,12 +142,39 @@ class OriginChatsServer:
                 self.connected_clients.remove(websocket)
                 Logger.delete(f"Client {client_ip} removed. {len(self.connected_clients)} clients remaining")
                 
+                username = getattr(websocket, "username", "")
+                
                 if getattr(websocket, "authenticated", False):
-                    username = getattr(websocket, "username", "")
-                    await broadcast_to_all(self.connected_clients, {
-                        "cmd": "user_disconnect",
-                        "username": username
-                    })
+                    user_id = getattr(websocket, "user_id", None)
+                    current_voice_channel = getattr(websocket, "voice_channel", None)
+                    
+                    if user_id and current_voice_channel:
+                        if current_voice_channel in self.voice_channels and user_id in self.voice_channels[current_voice_channel]:
+                            await broadcast_to_voice_channel_with_viewers(
+                                self.connected_clients,
+                                self.voice_channels,
+                                {
+                                    "type": "voice_user_left",
+                                    "channel": current_voice_channel,
+                                    "username": username
+                                },
+                                {
+                                    "type": "voice_user_left",
+                                    "channel": current_voice_channel,
+                                    "username": username
+                                },
+                                current_voice_channel
+                            )
+                            
+                            del self.voice_channels[current_voice_channel][user_id]
+                            
+                            if not self.voice_channels[current_voice_channel]:
+                                del self.voice_channels[current_voice_channel]
+
+                await broadcast_to_all(self.connected_clients, {
+                    "cmd": "user_disconnect",
+                    "username": username
+                })
     
     async def broadcast_wrapper(self, message):
         """Wrapper for broadcast_to_all to maintain compatibility with watchers"""
